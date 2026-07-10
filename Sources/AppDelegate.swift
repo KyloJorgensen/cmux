@@ -12883,7 +12883,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return true
     }
 
-    private func handleCustomShortcut(event: NSEvent) -> Bool {
+    func handleCustomShortcut(event: NSEvent) -> Bool {
         guard event.type == .keyDown else {
             clearConfiguredShortcutChordState()
             return false
@@ -14869,19 +14869,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return didCreateSplit
     }
 
-    /// Allow AppKit-backed browser surfaces (WKWebView) to route non-menu shortcuts
-    /// through the same app-level shortcut handler used by the local key monitor.
-    @discardableResult
-    func handleBrowserSurfaceKeyEquivalent(_ event: NSEvent) -> Bool {
-        handleConfiguredShortcutKeyEquivalent(event)
-    }
-
-    /// Route AppKit key-equivalent fallbacks through the same configured shortcut
-    /// dispatcher as the local key monitor before any stale menu item can run.
-    @discardableResult
-    func handleConfiguredShortcutKeyEquivalent(_ event: NSEvent) -> Bool {
-        handleCustomShortcut(event: event)
-    }
 
     /// Route numbered workspace/surface key-equivalent fallbacks through the same
     /// app shortcut dispatcher before terminal-owned non-Command keys go to Ghostty.

@@ -37,28 +37,32 @@ final class BrowserPrewarmedWebViewPool: NSObject {
     }
 
     private var entry: Entry?
-    private var expiryTask: Task<Void, Never>?
-    private let timeToLive: Duration
+    private var expiryTimer: Timer?
+    private let timeToLive: TimeInterval
     private let makeWebView: @MainActor (UUID, (any BrowserWebExtensionHosting)?) -> CmuxWebView
     private let startLoad: @MainActor (CmuxWebView, URLRequest) -> Void
-    private let expirySleep: @Sendable (Duration) async throws -> Void
+    private let expiryScheduler: @MainActor (TimeInterval, @escaping @MainActor () -> Void) -> Timer?
 
     init(
-        timeToLive: Duration = .seconds(180),
+        timeToLive: TimeInterval = 180,
         makeWebView: @escaping @MainActor (UUID, (any BrowserWebExtensionHosting)?) -> CmuxWebView = { profileID, browserWebExtensionHost in
             BrowserPanel.makeWebView(profileID: profileID, browserWebExtensionHost: browserWebExtensionHost)
         },
         startLoad: @escaping @MainActor (CmuxWebView, URLRequest) -> Void = { webView, request in
             webView.load(request)
         },
-        expirySleep: @escaping @Sendable (Duration) async throws -> Void = { duration in
-            try await Task.sleep(for: duration)
+        scheduleExpiry: @escaping @MainActor (TimeInterval, @escaping @MainActor () -> Void) -> Timer? = { interval, action in
+            let timer = Timer(timeInterval: interval, repeats: false) { _ in
+                Task { @MainActor in action() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            return timer
         }
     ) {
         self.timeToLive = timeToLive
         self.makeWebView = makeWebView
         self.startLoad = startLoad
-        self.expirySleep = expirySleep
+        self.expiryScheduler = scheduleExpiry
     }
 
     /// Whether a live entry exists for the URL + profile, regardless of load
@@ -142,8 +146,8 @@ final class BrowserPrewarmedWebViewPool: NSObject {
         webView.browserPortalPrepareForHiddenHostAdoption()
         entry.hostWindow.close()
         self.entry = nil
-        expiryTask?.cancel()
-        expiryTask = nil
+        expiryTimer?.invalidate()
+        expiryTimer = nil
 #if DEBUG
         cmuxDebugLog("browser.prewarmPool.claim url=\(url.absoluteString)")
 #endif
@@ -151,8 +155,8 @@ final class BrowserPrewarmedWebViewPool: NSObject {
     }
 
     func discard(reason: String) {
-        expiryTask?.cancel()
-        expiryTask = nil
+        expiryTimer?.invalidate()
+        expiryTimer = nil
         guard let entry else { return }
         entry.webView.navigationDelegate = nil
         entry.webView.stopLoading()
@@ -165,16 +169,9 @@ final class BrowserPrewarmedWebViewPool: NSObject {
     }
 
     private func scheduleExpiry() {
-        expiryTask?.cancel()
+        expiryTimer?.invalidate()
         let ttl = timeToLive
-        let sleep = expirySleep
-        expiryTask = Task { [weak self] in
-            do {
-                try await sleep(ttl)
-            } catch {
-                return
-            }
-            guard !Task.isCancelled else { return }
+        expiryTimer = expiryScheduler(ttl) { [weak self] in
             self?.discard(reason: "expired")
         }
     }

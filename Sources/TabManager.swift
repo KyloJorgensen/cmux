@@ -19,16 +19,6 @@ import Darwin
 import OSLog
 import CmuxTerminal
 
-// MARK: - Tab Type Alias for Backwards Compatibility
-// The old Tab class is replaced by Workspace
-typealias Tab = Workspace
-
-private let tabManagerLogger = Logger(subsystem: "com.cmuxterm.app", category: "TabManager")
-
-enum WorkspaceOrderChangeNotificationKey {
-    static let movedWorkspaceIds = "movedWorkspaceIds"
-}
-
 #if DEBUG
 // Sample the actual IOSurface-backed terminal layer at vsync cadence so UI tests can reliably
 // catch a single compositor-frame blank flash and any transient compositor scaling (stretched text).

@@ -56,12 +56,12 @@ final class BrowserWebExtensionWindowAdapter: NSObject, WKWebExtensionWindow {
             ))
             return
         }
-        NSApp.activate()
+        NSApp.activate(ignoringOtherApps: false)
         hostWindow.makeKeyAndOrderFront(nil)
         completionHandler(nil)
     }
 
     private var hostWindow: NSWindow? {
-        support?.activeTabAdapter?.panel?.webView.window ?? NSApp.keyWindow
+        support?.activeTabAdapter?.panel?.webView.window
     }
 }

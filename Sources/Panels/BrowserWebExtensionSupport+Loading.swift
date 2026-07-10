@@ -26,15 +26,22 @@ extension BrowserWebExtensionSupport {
                 )
             }
         )
+        discardLoadErrorsNotInDesiredEntries(plan.desiredEntries)
 
         var failedUnloadEntries: [BrowserWebExtensionEntry] = []
+        var unloadedEntryIDs = Set<String>()
         for entry in plan.unloadEntries {
             if let failedEntry = unload(
                 entryID: entry.id,
                 preservePermissionState: entry.preservePermissionState
             ) {
                 failedUnloadEntries.append(failedEntry)
+            } else {
+                unloadedEntryIDs.insert(entry.id)
             }
+        }
+        if !unloadedEntryIDs.isEmpty {
+            loadedEntryIDsInOrder.removeAll { unloadedEntryIDs.contains($0) }
         }
 
         if !failedUnloadEntries.isEmpty {
@@ -54,6 +61,16 @@ extension BrowserWebExtensionSupport {
 
         guard canApplyWebExtensionLoad(generation: generation) else { return }
         rebuildActionSnapshots()
+    }
+
+    func discardLoadErrorsNotInDesiredEntries(_ desiredEntries: [BrowserWebExtensionEntry]) {
+        let desiredEntryIDs = Set(desiredEntries.map(\.id))
+        let staleEntryIDs = loadErrorsByEntryID.keys.filter { !desiredEntryIDs.contains($0) }
+        guard !staleEntryIDs.isEmpty else { return }
+        for entryID in staleEntryIDs {
+            loadErrorsByEntryID.removeValue(forKey: entryID)
+        }
+        refreshLoadErrors()
     }
 
     func canApplyWebExtensionLoad(generation: Int) -> Bool {
@@ -165,7 +182,6 @@ extension BrowserWebExtensionSupport {
             removePermissionState(entryID: entryID, standardizedPath: record.standardizedPath)
         }
         loadedByEntryID[entryID] = nil
-        loadedEntryIDsInOrder.removeAll { $0 == entryID }
         loadErrorsByEntryID.removeValue(forKey: entryID)
         refreshLoadErrors()
 
@@ -186,10 +202,16 @@ extension BrowserWebExtensionSupport {
     @discardableResult
     func unloadAllWebExtensions() -> Bool {
         var didUnloadEveryExtension = true
-        for entryID in Array(loadedEntryIDsInOrder) {
+        var unloadedEntryIDs = Set<String>()
+        for entryID in loadedEntryIDsInOrder {
             if unload(entryID: entryID) != nil {
                 didUnloadEveryExtension = false
+            } else {
+                unloadedEntryIDs.insert(entryID)
             }
+        }
+        if !unloadedEntryIDs.isEmpty {
+            loadedEntryIDsInOrder.removeAll { unloadedEntryIDs.contains($0) }
         }
         rebuildActionSnapshots()
         return didUnloadEveryExtension
@@ -221,9 +243,7 @@ extension BrowserWebExtensionSupport {
                 standardizedPath: standardizedPath,
                 context: context
             )
-            if !loadedEntryIDsInOrder.contains(entry.id) {
-                loadedEntryIDsInOrder.append(entry.id)
-            }
+            loadedEntryIDsInOrder.append(entry.id)
             loadErrorsByEntryID.removeValue(forKey: entry.id)
             refreshLoadErrors()
 #if DEBUG
@@ -253,7 +273,11 @@ extension BrowserWebExtensionSupport {
         )
         guard restoredEntries != settingsEntries else { return }
         do {
-            try await settingsStore.set(restoredEntries, for: settingsKey)
+            try await settingsStore.set(
+                restoredEntries,
+                for: settingsKey,
+                ifCurrentValueIs: settingsEntries
+            )
         } catch {
             for entry in failedEntries {
                 recordLoadError(error.localizedDescription, entryID: entry.id)

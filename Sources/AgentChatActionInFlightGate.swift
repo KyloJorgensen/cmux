@@ -8,7 +8,6 @@ nonisolated struct AgentChatActionInFlightGate {
         var sidecarStateFileStore = AgentChatSidecarStateFileStore.live()
     }
 
-    // Synchronous AppKit action entrypoints require short, nonblocking access without actor hops.
     private nonisolated static let lock = OSAllocatedUnfairLock(initialState: State())
 
     static func begin() -> Bool {

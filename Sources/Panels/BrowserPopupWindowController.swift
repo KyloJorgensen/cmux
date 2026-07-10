@@ -10,11 +10,6 @@ import Security
 /// Hosts a popup `CmuxWebView` in a standalone `NSPanel`, created when a page
 /// calls `window.open()` (scripted new-window requests).
 ///
-/// Lifecycle:
-/// - The controller self-retains via `objc_setAssociatedObject` on its panel.
-/// - Released in `windowWillClose(_:)` when the panel closes.
-/// - The opener `BrowserPanel` also keeps a strong reference for deterministic
-///   cleanup when the opener tab or workspace is closed.
 @MainActor
 final class BrowserPopupWindowController: NSObject, NSWindowDelegate {
 
@@ -647,6 +642,11 @@ private class PopupUIDelegate: BrowserPDFPreviewActionUIDelegate {
 
         guard let url = navigationAction.request.url else {
             decisionHandler(.allow)
+            return
+        }
+
+        if browserNavigationShouldBlockWebExtensionURLInOrdinaryPopup(url) {
+            decisionHandler(.cancel)
             return
         }
 

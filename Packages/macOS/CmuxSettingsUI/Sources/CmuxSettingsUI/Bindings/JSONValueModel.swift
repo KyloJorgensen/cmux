@@ -108,49 +108,46 @@ public final class JSONValueModel<Value: SettingCodable> {
     /// setters can't `await`.
     @discardableResult
     public func set(_ value: Value) -> UInt64 {
-        let keyID = key.id
-        let requestID = makeWriteRequestID()
-        let previousWriteTask = writeTask
-        writeTask = Task { [weak self, store, key] in
-            await previousWriteTask?.value
-            do {
-                try await store.set(value, for: key)
-                await MainActor.run {
-                    guard let self else { return }
-                    self.finishWrite(requestID: requestID, error: nil)
-                }
-            } catch {
-                await MainActor.run {
-                    guard let self else { return }
-                    self.finishWrite(requestID: requestID, error: error)
-                    self.errorLog.record(error, keyID: keyID)
-                }
-            }
+        enqueueWrite { [store, key] in
+            try await store.set(value, for: key)
         }
-        return requestID
+    }
+
+    /// Persists the value only if the latest on-disk value still matches the
+    /// value the caller edited. This protects read-modify-write controls from
+    /// overwriting malformed or concurrently changed settings.
+    @discardableResult
+    public func set(_ value: Value, ifCurrentValueIs expectedValue: Value) -> UInt64 {
+        enqueueWrite { [store, key] in
+            try await store.set(value, for: key, ifCurrentValueIs: expectedValue)
+        }
     }
 
     /// Removes the JSON entry (parents that become empty are pruned).
     /// ``current`` updates when the stream observes the reset.
     @discardableResult
     public func reset() -> UInt64 {
+        enqueueWrite { [store, key] in
+            try await store.reset(key)
+        }
+    }
+
+    private func enqueueWrite(
+        _ operation: @escaping @Sendable () async throws -> Void
+    ) -> UInt64 {
         let keyID = key.id
         let requestID = makeWriteRequestID()
         let previousWriteTask = writeTask
-        writeTask = Task { [weak self, store, key] in
+        writeTask = Task { [weak self] in
             await previousWriteTask?.value
             do {
-                try await store.reset(key)
-                await MainActor.run {
-                    guard let self else { return }
-                    self.finishWrite(requestID: requestID, error: nil)
-                }
+                try await operation()
+                guard let self else { return }
+                finishWrite(requestID: requestID, error: nil)
             } catch {
-                await MainActor.run {
-                    guard let self else { return }
-                    self.finishWrite(requestID: requestID, error: error)
-                    self.errorLog.record(error, keyID: keyID)
-                }
+                guard let self else { return }
+                finishWrite(requestID: requestID, error: error)
+                errorLog.record(error, keyID: keyID)
             }
         }
         return requestID

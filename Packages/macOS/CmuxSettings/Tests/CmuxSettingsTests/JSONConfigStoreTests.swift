@@ -164,4 +164,61 @@ struct JSONConfigStoreTests {
         #expect(store.snapshotValue(for: catalog.app.devWindowDisplay) == "")
     }
 
+    @Test func conditionalWriteRejectsStaleValue() async throws {
+        let (store, _, _) = makeStore()
+        let key = JSONKey<[String]>(id: "browser.webExtensions", defaultValue: [])
+        try await store.set(["first"], for: key)
+
+        await #expect(throws: JSONConfigStoreWriteError.valueChanged) {
+            try await store.set(["replacement"], for: key, ifCurrentValueIs: [])
+        }
+        #expect(await store.value(for: key) == ["first"])
+
+        try await store.set(["second"], for: key, ifCurrentValueIs: ["first"])
+        #expect(await store.value(for: key) == ["second"])
+    }
+
+
+    @Test func conditionalWriteRefreshesCacheFromExternalValue() async throws {
+        let (store, fileURL, _) = makeStore()
+        let key = JSONKey<[String]>(id: "browser.webExtensions", defaultValue: [])
+        try await store.set(["cached"], for: key)
+        try Data(#"{"browser":{"webExtensions":["external"]}}"#.utf8).write(to: fileURL)
+
+        await #expect(throws: JSONConfigStoreWriteError.valueChanged) {
+            try await store.set(["replacement"], for: key, ifCurrentValueIs: ["cached"])
+        }
+
+        #expect(await store.value(for: key) == ["external"])
+    }
+    @Test func conditionalWritePreservesMalformedStoredValue() async throws {
+        let (store, fileURL, _) = makeStore()
+        let key = JSONKey<[String]>(id: "browser.webExtensions", defaultValue: [])
+        let malformed = #"{"browser":{"webExtensions":["valid",42]}}"#
+        try Data(malformed.utf8).write(to: fileURL)
+
+        await #expect(throws: JSONConfigStoreWriteError.valueChanged) {
+            try await store.set(["replacement"], for: key, ifCurrentValueIs: [])
+        }
+        #expect(String(decoding: try Data(contentsOf: fileURL), as: UTF8.self) == malformed)
+    }
+
+
+    @Test func normalWritePreservesConcurrentExternalSibling() async throws {
+        let (store, fileURL, _) = makeStore()
+        let key = JSONKey<String>(id: "browser.webExtensionsStatus", defaultValue: "")
+        try await store.set("initial", for: key)
+
+        let external = #"{"browser":{"webExtensionsStatus":"initial"},"external":{"keep":"value"}}"#
+        try Data(external.utf8).write(to: fileURL)
+        try await store.set("updated", for: key)
+
+        let parsed = try #require(
+            JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
+        )
+        let browser = try #require(parsed["browser"] as? [String: Any])
+        let externalObject = try #require(parsed["external"] as? [String: Any])
+        #expect(browser["webExtensionsStatus"] as? String == "updated")
+        #expect(externalObject["keep"] as? String == "value")
+    }
 }

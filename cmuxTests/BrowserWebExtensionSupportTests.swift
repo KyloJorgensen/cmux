@@ -62,239 +62,33 @@ struct BrowserWebExtensionSupportTests {
         #expect((support.webExtensionWindow(for: firstWindow) as AnyObject?) === support.windowAdapter)
         let unrelatedWindow = NSWindow()
         #expect(support.webExtensionWindow(for: unrelatedWindow) == nil)
+
+        support.unregister(panelID: firstPanel.id)
+        #expect(support.activePanelID == nil)
+        support.noteWindowBecameKey(secondWindow)
+        #expect(support.activePanelID == secondPanel.id)
     }
 
+    @MainActor
     @Test
-    func reconciliationSkipsEnvPathWhenSettingsEntryIsDisabled() {
-        let planner = BrowserWebExtensionReconciliationPlanner()
-        let appexPath = "/Applications/Bitwarden.app/Contents/PlugIns/safari.appex"
-        let plan = planner.plan(
-            settingsEntries: [
-                BrowserWebExtensionEntry(
-                    id: "com.bitwarden.desktop.safari",
-                    kind: .safariAppExtension,
-                    path: appexPath,
-                    enabled: false
-                ),
-            ],
-            environmentPaths: [appexPath],
-            loadedEntries: []
+    @available(macOS 15.4, *)
+    func registeringBackgroundPanelDoesNotMakeItActive() {
+        let support = BrowserWebExtensionSupport()
+        let panel = BrowserPanel(
+            workspaceId: UUID(),
+            initialURL: URL(string: "https://background.example"),
+            renderInitialNavigation: false,
+            browserWebExtensionHost: support
         )
+        defer { panel.close() }
 
-        #expect(plan.desiredEntries.isEmpty)
-        #expect(plan.loadEntries.isEmpty)
-        #expect(plan.unloadEntryIDs.isEmpty)
+        support.register(panel: panel)
+
+        #expect(support.activePanelID == nil)
+        support.noteActivated(panelID: panel.id)
+        #expect(support.activePanelID == panel.id)
     }
 
-    @Test
-    func reconciliationSkipsEnvResourceRootWhenSettingsEntryIsDisabled() {
-        let planner = BrowserWebExtensionReconciliationPlanner()
-        let appexPath = "/Applications/Bitwarden.app/Contents/PlugIns/safari.appex"
-        let resourcePath = "\(appexPath)/Contents/Resources"
-        let plan = planner.plan(
-            settingsEntries: [
-                BrowserWebExtensionEntry(
-                    id: "com.bitwarden.desktop.safari",
-                    kind: .safariAppExtension,
-                    path: appexPath,
-                    enabled: false
-                ),
-            ],
-            environmentPaths: [resourcePath],
-            loadedEntries: []
-        )
-
-        #expect(plan.desiredEntries.isEmpty)
-        #expect(plan.loadEntries.isEmpty)
-        #expect(plan.unloadEntryIDs.isEmpty)
-    }
-
-    @Test
-    func reconciliationDoesNotLoadSamePathTwice() {
-        let planner = BrowserWebExtensionReconciliationPlanner()
-        let appexPath = "/Applications/Bitwarden.app/Contents/PlugIns/safari.appex"
-        let plan = planner.plan(
-            settingsEntries: [
-                BrowserWebExtensionEntry(
-                    id: "com.bitwarden.desktop.safari",
-                    kind: .safariAppExtension,
-                    path: appexPath,
-                    enabled: true
-                ),
-            ],
-            environmentPaths: [appexPath],
-            loadedEntries: []
-        )
-
-        #expect(plan.desiredEntries.map(\.id) == ["com.bitwarden.desktop.safari"])
-        #expect(plan.loadEntries.map(\.id) == ["com.bitwarden.desktop.safari"])
-    }
-
-    @Test
-    func reconciliationDoesNotLoadBundleAndResourceRootTwice() {
-        let planner = BrowserWebExtensionReconciliationPlanner()
-        let appexPath = "/Applications/Bitwarden.app/Contents/PlugIns/safari.appex"
-        let resourcePath = "\(appexPath)/Contents/Resources"
-        let plan = planner.plan(
-            settingsEntries: [
-                BrowserWebExtensionEntry(
-                    id: "com.bitwarden.desktop.safari",
-                    kind: .safariAppExtension,
-                    path: appexPath,
-                    enabled: true
-                ),
-                BrowserWebExtensionEntry(
-                    id: resourcePath,
-                    kind: .unpackedDirectory,
-                    path: resourcePath,
-                    enabled: true
-                ),
-            ],
-            environmentPaths: [],
-            loadedEntries: []
-        )
-
-        #expect(plan.desiredEntries.map(\.id) == ["com.bitwarden.desktop.safari"])
-        #expect(plan.loadEntries.map(\.id) == ["com.bitwarden.desktop.safari"])
-    }
-
-    @Test
-    func reconciliationKeepsLoadedSafariExtensionWhenResourceRootMatches() {
-        let planner = BrowserWebExtensionReconciliationPlanner()
-        let appexPath = "/Applications/Bitwarden.app/Contents/PlugIns/safari.appex"
-        let resourcePath = BrowserWebExtensionEntry.standardizedSafariAppExtensionResourceRootPath(appexPath)
-        let plan = planner.plan(
-            settingsEntries: [
-                BrowserWebExtensionEntry(
-                    id: "com.bitwarden.desktop.safari",
-                    kind: .safariAppExtension,
-                    path: appexPath,
-                    enabled: true
-                ),
-            ],
-            environmentPaths: [],
-            loadedEntries: [
-                BrowserWebExtensionReconciliationPlanner.LoadedEntry(
-                    id: "com.bitwarden.desktop.safari",
-                    standardizedPath: resourcePath
-                ),
-            ]
-        )
-
-        #expect(plan.unloadEntryIDs.isEmpty)
-        #expect(plan.loadEntries.isEmpty)
-    }
-
-    @Test
-    func reconciliationDeduplicatesRepeatedEnvironmentPaths() {
-        let planner = BrowserWebExtensionReconciliationPlanner()
-        let extensionPath = "/tmp/cmux-web-extensions/../cmux-web-extensions/Example"
-        let standardizedPath = BrowserWebExtensionReconciliationPlanner.standardizedPath(extensionPath)
-        let plan = planner.plan(
-            settingsEntries: [],
-            environmentPaths: [
-                extensionPath,
-                standardizedPath,
-            ],
-            loadedEntries: []
-        )
-
-        #expect(plan.desiredEntries.map(\.id) == [extensionPath])
-        #expect(plan.desiredEntries.map(\.path) == [extensionPath])
-        #expect(plan.loadEntries.map(\.id) == [extensionPath])
-        #expect(plan.unloadEntryIDs.isEmpty)
-    }
-
-    @Test
-    func reconciliationReloadsWhenPathChangesForSameEntryID() {
-        let planner = BrowserWebExtensionReconciliationPlanner()
-        let oldPath = "/Applications/Bitwarden.app/Contents/PlugIns/safari.appex"
-        let newPath = "/Applications/Bitwarden Beta.app/Contents/PlugIns/safari.appex"
-        let plan = planner.plan(
-            settingsEntries: [
-                BrowserWebExtensionEntry(
-                    id: "com.bitwarden.desktop.safari",
-                    kind: .safariAppExtension,
-                    path: newPath,
-                    enabled: true
-                ),
-            ],
-            environmentPaths: [],
-            loadedEntries: [
-                BrowserWebExtensionReconciliationPlanner.LoadedEntry(
-                    id: "com.bitwarden.desktop.safari",
-                    standardizedPath: BrowserWebExtensionReconciliationPlanner.standardizedPath(oldPath)
-                ),
-            ]
-        )
-
-        #expect(plan.unloadEntryIDs == ["com.bitwarden.desktop.safari"])
-        #expect(plan.unloadEntries == [
-            BrowserWebExtensionReconciliationPlanner.UnloadEntry(
-                id: "com.bitwarden.desktop.safari",
-                preservePermissionState: false
-            ),
-        ])
-        #expect(plan.loadEntries.map(\.path) == [newPath])
-    }
-
-    @Test
-    func reconciliationPreservesPermissionStateWhenConfiguredEntryIsDisabled() {
-        let planner = BrowserWebExtensionReconciliationPlanner()
-        let appexPath = "/Applications/Bitwarden.app/Contents/PlugIns/safari.appex"
-        let resourcePath = BrowserWebExtensionReconciliationPlanner.standardizedResourceRootPath(
-            for: BrowserWebExtensionEntry(
-                id: "com.bitwarden.desktop.safari",
-                kind: .safariAppExtension,
-                path: appexPath,
-                enabled: true
-            )
-        )
-        let plan = planner.plan(
-            settingsEntries: [
-                BrowserWebExtensionEntry(
-                    id: "com.bitwarden.desktop.safari",
-                    kind: .safariAppExtension,
-                    path: appexPath,
-                    enabled: false
-                ),
-            ],
-            environmentPaths: [],
-            loadedEntries: [
-                BrowserWebExtensionReconciliationPlanner.LoadedEntry(
-                    id: "com.bitwarden.desktop.safari",
-                    standardizedPath: resourcePath
-                ),
-            ]
-        )
-
-        #expect(plan.unloadEntries == [
-            BrowserWebExtensionReconciliationPlanner.UnloadEntry(
-                id: "com.bitwarden.desktop.safari",
-                preservePermissionState: true
-            ),
-        ])
-        #expect(plan.loadEntries.isEmpty)
-    }
-
-    @Test
-    func failedUnloadRollbackRestoresTheLoadedEntryAsEnabled() {
-        let planner = BrowserWebExtensionReconciliationPlanner()
-        let loadedEntry = BrowserWebExtensionEntry(
-            id: "com.example.extension",
-            kind: .safariAppExtension,
-            path: "/Applications/Example.app/Contents/PlugIns/Example.appex",
-            enabled: true,
-            displayName: "Example"
-        )
-
-        let restored = planner.rollbackEntriesAfterFailedUnloads(
-            settingsEntries: [],
-            failedEntries: [loadedEntry]
-        )
-
-        #expect(restored == [loadedEntry])
-    }
 
     @MainActor
     @Test
@@ -451,13 +245,192 @@ struct BrowserWebExtensionSupportTests {
         #expect(candidates.last?.version == "1.2.3")
         #expect(candidates.last?.path == "/Applications/Example App.app/Contents/PlugIns/Example Extension.appex")
     }
+
+    @MainActor
+    @Test
+    @available(macOS 15.4, *)
+    func extensionCreatesFirstBrowserTabInActiveTerminalWindow() throws {
+        let defaults = UserDefaults.standard
+        let originalDisabledValue = defaults.object(forKey: BrowserAvailabilitySettings.disabledKey)
+        BrowserAvailabilitySettings.setDisabled(false, defaults: defaults)
+        defer {
+            if let originalDisabledValue {
+                defaults.set(originalDisabledValue, forKey: BrowserAvailabilitySettings.disabledKey)
+            } else {
+                defaults.removeObject(forKey: BrowserAvailabilitySettings.disabledKey)
+            }
+            NotificationCenter.default.post(
+                name: BrowserAvailabilitySettings.didChangeNotification,
+                object: nil
+            )
+        }
+
+        let support = BrowserWebExtensionSupport()
+        let tabManager = TabManager(browserWebExtensionHost: support)
+        let workspace = try #require(tabManager.selectedWorkspace)
+        #expect(workspace.panels.values.allSatisfy { !($0 is BrowserPanel) })
+
+        let adapter = support.openBrowserTab(
+            in: tabManager,
+            url: nil,
+            shouldActivate: false,
+            webViewConfiguration: nil
+        )
+
+        let panel = try #require(adapter?.panel)
+        defer { _ = workspace.closePanel(panel.id, force: true) }
+        #expect(panel.workspaceId == workspace.id)
+        #expect(workspace.panels[panel.id] === panel)
+    }
+
+    @MainActor
+    @Test
+    func configuredCmuxShortcutTakesPriorityOverExtensionCommand() throws {
+        let appDelegate = try #require(AppDelegate.shared)
+        let action = KeyboardShortcutSettings.Action.openBrowser
+        let hadPersistedShortcut = UserDefaults.standard.object(forKey: action.defaultsKey) != nil
+        let originalShortcut = KeyboardShortcutSettings.shortcut(for: action)
+        defer {
+            if hadPersistedShortcut {
+                KeyboardShortcutSettings.setShortcut(originalShortcut, for: action)
+            } else {
+                KeyboardShortcutSettings.resetShortcut(for: action)
+            }
+        }
+        let event = try #require(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.command, .shift],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: 0,
+            context: nil,
+            characters: "L",
+            charactersIgnoringModifiers: "l",
+            isARepeat: false,
+            keyCode: 37
+        ))
+
+        KeyboardShortcutSettings.setShortcut(action.defaultShortcut, for: action)
+        #expect(!appDelegate.shouldOfferBrowserWebExtensionCommand(event))
+
+        KeyboardShortcutSettings.setShortcut(.unbound, for: action)
+        #expect(appDelegate.shouldOfferBrowserWebExtensionCommand(event))
+    }
+
+    @MainActor
+    @Test
+    @available(macOS 15.4, *)
+    func extensionPagePanelLookupMatchesTheOwningContextOnly() throws {
+        let extensionURL = try #require(URL(string: "webkit-extension://cmux-test/options.html"))
+        let host = BrowserWebExtensionNavigationPolicyTestHost(extensionHost: extensionURL.host)
+        let panel = BrowserPanel(
+            workspaceId: UUID(),
+            initialURL: extensionURL,
+            renderInitialNavigation: false,
+            browserWebExtensionHost: host
+        )
+        let support = BrowserWebExtensionSupport()
+        support.register(panel: panel)
+        defer {
+            support.unregister(panelID: panel.id)
+            panel.close()
+        }
+
+        #expect(
+            support.extensionPagePanels(usingContextIdentifier: host.contextIdentifier).map(\.id) == [panel.id]
+        )
+        #expect(
+            support.extensionPagePanels(usingContextIdentifier: ObjectIdentifier(NSObject())).isEmpty
+        )
+    }
+
+    @Test
+    func standardizedExtensionPathResolvesSymlinkAliases() throws {
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-web-extension-symlink-\(UUID().uuidString)", isDirectory: true)
+        let extensionDirectory = tempDirectory.appendingPathComponent("Extension", isDirectory: true)
+        let aliasURL = tempDirectory.appendingPathComponent("Extension Alias", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        try FileManager.default.createDirectory(at: extensionDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: aliasURL, withDestinationURL: extensionDirectory)
+
+        #expect(
+            BrowserWebExtensionEntry.standardizedPath(aliasURL.path)
+                == BrowserWebExtensionEntry.standardizedPath(extensionDirectory.path)
+        )
+    }
+
+    @MainActor
+    @Test
+    @available(macOS 15.4, *)
+    func removingFailedExtensionClearsOnlyItsLoadError() {
+        let support = BrowserWebExtensionSupport()
+        support.loadErrorsByEntryID = [
+            "keep": "keep: still failed",
+            "remove": "remove: stale failure",
+        ]
+        support.discardLoadErrorsNotInDesiredEntries([
+            BrowserWebExtensionEntry(
+                id: "keep",
+                kind: .unpackedDirectory,
+                path: "/tmp/keep",
+                enabled: true
+            ),
+        ])
+
+        #expect(support.loadErrorsByEntryID == ["keep": "keep: still failed"])
+        #expect(support.loadErrors == ["keep: still failed"])
+    }
+
+    @Test
+    func ordinaryPopupBlocksWebExtensionURLs() throws {
+        let extensionURL = try #require(URL(string: "webkit-extension://example/options.html"))
+        let webURL = try #require(URL(string: "https://example.com"))
+
+        #expect(browserNavigationShouldBlockWebExtensionURLInOrdinaryPopup(extensionURL))
+        #expect(!browserNavigationShouldBlockWebExtensionURLInOrdinaryPopup(webURL))
+    }
+
+    @Test
+    @available(macOS 15.4, *)
+    func extensionWindowPolicyRejectsDroppedTabsAndURLs() {
+        #expect(browserWebExtensionCanRepresentNewWindow(
+            type: .popup,
+            shouldBePrivate: false,
+            tabURLCount: 1,
+            existingTabCount: 0
+        ))
+        #expect(!browserWebExtensionCanRepresentNewWindow(
+            type: .popup,
+            shouldBePrivate: false,
+            tabURLCount: 2,
+            existingTabCount: 0
+        ))
+        #expect(!browserWebExtensionCanRepresentNewWindow(
+            type: .normal,
+            shouldBePrivate: false,
+            tabURLCount: 0,
+            existingTabCount: 1
+        ))
+        #expect(!browserWebExtensionCanRepresentNewWindow(
+            type: .normal,
+            shouldBePrivate: true,
+            tabURLCount: 0,
+            existingTabCount: 0
+        ))
+    }
 }
 
 @MainActor
-private final class BrowserWebExtensionNavigationPolicyTestHost: BrowserWebExtensionHosting {
+final class BrowserWebExtensionNavigationPolicyTestHost: BrowserWebExtensionHosting {
     private let extensionHost: String?
     private let contextToken = NSObject()
     private let configuration = WKWebViewConfiguration()
+
+    var contextIdentifier: ObjectIdentifier {
+        ObjectIdentifier(contextToken)
+    }
 
     init(extensionHost: String?) {
         self.extensionHost = extensionHost

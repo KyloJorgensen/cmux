@@ -17,6 +17,7 @@ final class BrowserWebExtensionPopoutWindowController: NSObject, WKWebExtensionW
     private weak var support: BrowserWebExtensionSupport?
     private(set) weak var extensionContext: WKWebExtensionContext?
 
+    private var metadataObservations: [NSKeyValueObservation] = []
     init(
         configuration: WKWebExtension.WindowConfiguration,
         context: WKWebExtensionContext,
@@ -66,13 +67,14 @@ final class BrowserWebExtensionPopoutWindowController: NSObject, WKWebExtensionW
             localized: "browser.webExtension.action.help",
             defaultValue: "Extension"
         )
+        installTabMetadataObservers()
 
         if let url = configuration.tabURLs.first,
            support.canOpenExtensionPopupURL(url, for: context) {
             webView.load(URLRequest(url: url))
         }
         if configuration.shouldBeFocused {
-            NSApp.activate()
+            NSApp.activate(ignoringOtherApps: false)
             window.makeKeyAndOrderFront(nil)
         } else {
             window.orderFront(nil)
@@ -81,6 +83,33 @@ final class BrowserWebExtensionPopoutWindowController: NSObject, WKWebExtensionW
 
     var isKeyWindow: Bool {
         window.isKeyWindow
+    }
+
+    private func installTabMetadataObservers() {
+        metadataObservations = [
+            webView.observe(\.url, options: [.new]) { [weak self] _, _ in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.extensionContext?.didChangeTabProperties([.URL], for: self.tab)
+                }
+            },
+            webView.observe(\.title, options: [.new]) { [weak self] _, _ in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let title = (self.webView.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !title.isEmpty {
+                        self.window.title = title
+                    }
+                    self.extensionContext?.didChangeTabProperties([.title], for: self.tab)
+                }
+            },
+            webView.observe(\.isLoading, options: [.new]) { [weak self] _, _ in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.extensionContext?.didChangeTabProperties([.loading], for: self.tab)
+                }
+            },
+        ]
     }
 
     func closeFromExtensionOrUser() {
@@ -128,7 +157,7 @@ final class BrowserWebExtensionPopoutWindowController: NSObject, WKWebExtensionW
     }
 
     func focus(for context: WKWebExtensionContext, completionHandler: @escaping (Error?) -> Void) {
-        NSApp.activate()
+        NSApp.activate(ignoringOtherApps: false)
         window.makeKeyAndOrderFront(nil)
         completionHandler(nil)
     }

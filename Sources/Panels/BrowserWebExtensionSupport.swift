@@ -42,6 +42,8 @@ final class BrowserWebExtensionSupport: NSObject, BrowserWebExtensionHosting {
     @ObservationIgnored
     var browserAvailabilityObserverToken: NSObjectProtocol?
     @ObservationIgnored
+    var browserDefaultsObserverToken: NSObjectProtocol?
+    @ObservationIgnored
     var windowFocusObserverToken: NSObjectProtocol?
     @ObservationIgnored
     var loadedByEntryID: [String: BrowserWebExtensionLoadedRecord] = [:]
@@ -103,14 +105,17 @@ final class BrowserWebExtensionSupport: NSObject, BrowserWebExtensionHosting {
         if let browserAvailabilityObserverToken {
             NotificationCenter.default.removeObserver(browserAvailabilityObserverToken)
         }
+        if let browserDefaultsObserverToken {
+            NotificationCenter.default.removeObserver(browserDefaultsObserverToken)
+        }
         if let windowFocusObserverToken {
             NotificationCenter.default.removeObserver(windowFocusObserverToken)
         }
-        // Permission-state observer tokens need no explicit removal here: the
-        // block-based NotificationCenter tokens auto-unregister when they
-        // deallocate, which happens as the dictionaries holding them release
-        // with self. (Calling the @MainActor removal helper from nonisolated
-        // deinit does not compile.)
+        for tokens in permissionObserverTokensByEntryID.values {
+            for token in tokens {
+                NotificationCenter.default.removeObserver(token)
+            }
+        }
     }
 
     // MARK: - Configuration attachment
@@ -145,6 +150,15 @@ final class BrowserWebExtensionSupport: NSObject, BrowserWebExtensionHosting {
         browserAvailabilityObserverToken = NotificationCenter.default.addObserver(
             forName: BrowserAvailabilitySettings.didChangeNotification,
             object: nil,
+            queue: .main
+        ) { [weak self, jsonStore] _ in
+            Task { @MainActor in
+                self?.reconcileBrowserAvailability(jsonStore: jsonStore, key: key)
+            }
+        }
+        browserDefaultsObserverToken = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: UserDefaults.standard,
             queue: .main
         ) { [weak self, jsonStore] _ in
             Task { @MainActor in
@@ -201,19 +215,18 @@ final class BrowserWebExtensionSupport: NSObject, BrowserWebExtensionHosting {
         tabAdapters[panel.id] = adapter
         actionSnapshotInvalidationsByPanelID[panel.id] = BrowserWebExtensionActionSnapshotInvalidation()
         orderedPanelIDs.append(panel.id)
-        if activePanelID == nil { activePanelID = panel.id }
-        rememberActivePanel(panel.id)
         controller.didOpenTab(adapter)
     }
 
     func unregister(panelID: UUID) {
         guard let adapter = tabAdapters.removeValue(forKey: panelID) else { return }
+        let closingWindow = adapter.panel?.webView.window
         orderedPanelIDs.removeAll { $0 == panelID }
         activePanelIDsByWindow = activePanelIDsByWindow.filter { $0.value != panelID }
         actionSnapshotInvalidationsByPanelID.removeValue(forKey: panelID)
         controller.didCloseTab(adapter, windowIsClosing: false)
         if activePanelID == panelID {
-            activePanelID = orderedPanelIDs.last
+            activePanelID = closingWindow.flatMap { activePanelID(in: $0) }
             // Tell extensions which tab is active now, or they keep acting on
             // the closed one until the next focus change.
             if let successor = activePanelID.flatMap({ tabAdapters[$0] }) {
@@ -243,7 +256,11 @@ final class BrowserWebExtensionSupport: NSObject, BrowserWebExtensionHosting {
            let panelID = activePanelID(in: window) {
             noteActivated(panelID: panelID)
         }
-        controller.didFocusWindow(focusedWindow)
+        if let popout = focusedWindow as? BrowserWebExtensionPopoutWindowController {
+            popout.extensionContext?.didFocusWindow(popout)
+        } else {
+            controller.didFocusWindow(focusedWindow)
+        }
     }
 
     func webExtensionWindow(for window: NSWindow) -> (any WKWebExtensionWindow)? {
@@ -325,7 +342,7 @@ final class BrowserWebExtensionSupport: NSObject, BrowserWebExtensionHosting {
     func popoutDidClose(_ popout: BrowserWebExtensionPopoutWindowController) {
         guard popouts.contains(where: { $0 === popout }) else { return }
         popouts.removeAll { $0 === popout }
-        controller.didCloseTab(popout.tab, windowIsClosing: true)
-        controller.didCloseWindow(popout)
+        popout.extensionContext?.didCloseTab(popout.tab, windowIsClosing: true)
+        popout.extensionContext?.didCloseWindow(popout)
     }
 }

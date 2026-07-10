@@ -11,7 +11,7 @@ import WebKit
 
 /// Harness with all pool seams injected: the factory returns local webviews
 /// backed by a non-persistent store, loads are recorded instead of hitting
-/// the network, and the expiry sleep is swapped per test.
+/// the network, and expiry scheduling is swapped per test.
 @MainActor
 private final class PrewarmPoolHarness {
     let dataStore = WKWebsiteDataStore.nonPersistent()
@@ -19,9 +19,9 @@ private final class PrewarmPoolHarness {
     private(set) var loadedRequests: [URLRequest] = []
     let pool: BrowserPrewarmedWebViewPool
 
-    init(expirySleep: @escaping @Sendable (Duration) async throws -> Void = { _ in
-        try await Task.sleep(for: .seconds(3600))
-    }) {
+    init(
+        scheduleExpiry: @escaping @MainActor (TimeInterval, @escaping @MainActor () -> Void) -> Timer? = { _, _ in nil }
+    ) {
         var recordWebView: (@MainActor (CmuxWebView) -> Void)!
         var recordRequest: (@MainActor (URLRequest) -> Void)!
         let dataStore = dataStore
@@ -37,7 +37,7 @@ private final class PrewarmPoolHarness {
             startLoad: { _, request in
                 recordRequest(request)
             },
-            expirySleep: expirySleep
+            scheduleExpiry: scheduleExpiry
         )
         recordWebView = { [weak self] in self?.madeWebViews.append($0) }
         recordRequest = { [weak self] in self?.loadedRequests.append($0) }
@@ -292,16 +292,13 @@ struct BrowserPrewarmedWebViewPoolTests {
         #expect(!harness.pool.hasEntry(url: pricingURL, profileID: profileID))
     }
 
-    @Test func entryExpiresAfterTimeToLive() async {
-        let harness = PrewarmPoolHarness(expirySleep: { _ in })
+    @Test func entryExpiresAfterTimeToLive() {
+        let harness = PrewarmPoolHarness(scheduleExpiry: { _, action in
+            action()
+            return nil
+        })
         harness.pool.prewarm(url: pricingURL, profileID: profileID)
         harness.pool.webView(harness.madeWebViews[0], didFinish: nil)
-
-        var remainingYields = 1000
-        while harness.pool.hasEntry(url: pricingURL, profileID: profileID), remainingYields > 0 {
-            remainingYields -= 1
-            await Task.yield()
-        }
 
         #expect(!harness.pool.hasEntry(url: pricingURL, profileID: profileID))
         #expect(harness.madeWebViews[0].window == nil)

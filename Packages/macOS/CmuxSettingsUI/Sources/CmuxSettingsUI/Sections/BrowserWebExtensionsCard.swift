@@ -216,7 +216,8 @@ struct BrowserWebExtensionsCard: View {
 
     private func add(_ entry: BrowserWebExtensionEntry) {
         guard model.hasObservedValue else { return }
-        var entries = effectiveEntries
+        let previousEntries = effectiveEntries
+        var entries = previousEntries
         guard !entries.contains(where: { $0.id == entry.id }) else {
             presentDuplicateExtensionAlert(for: entry)
             return
@@ -227,7 +228,7 @@ struct BrowserWebExtensionsCard: View {
             return
         }
         entries.append(entry)
-        commitEntries(entries)
+        commitEntries(entries, replacing: previousEntries)
     }
 
     private func remove(id: String) {
@@ -240,13 +241,20 @@ struct BrowserWebExtensionsCard: View {
 
     private func updateEntries(_ update: (inout [BrowserWebExtensionEntry]) -> Bool) {
         guard model.hasObservedValue else { return }
-        var entries = effectiveEntries
+        let previousEntries = effectiveEntries
+        var entries = previousEntries
         guard update(&entries) else { return }
-        commitEntries(entries)
+        commitEntries(entries, replacing: previousEntries)
     }
 
-    private func commitEntries(_ entries: [BrowserWebExtensionEntry]) {
-        cardState.beginWrite(entries: entries, writeID: model.set(entries))
+    private func commitEntries(
+        _ entries: [BrowserWebExtensionEntry],
+        replacing previousEntries: [BrowserWebExtensionEntry]
+    ) {
+        cardState.beginWrite(
+            entries: entries,
+            writeID: model.set(entries, ifCurrentValueIs: previousEntries)
+        )
     }
 
     private func importSafariExtension(_ candidate: SettingsDiscoveredBrowserExtension) {

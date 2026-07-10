@@ -17,14 +17,9 @@ import Bonsplit
 import UniformTypeIdentifiers
 import CmuxTerminal
 
-/// The process entry point. When the binary is launched with a sidebar worker
-/// flag (the app re-executes its own binary that way so a crash in the
-/// interpreter or renderer kills only the worker process), run that worker
-/// loop instead of the app:
-/// - the render worker hosts its own faceless AppKit session and shares the
-///   rendered layer tree with the host;
-/// - the interpreter worker (stage-1 fallback path) runs before any
-///   AppKit/SwiftUI setup.
+/// Process entry point. Sidebar workers re-execute this binary with a worker
+/// flag, so route those faceless render/interpreter processes before initializing
+/// AppKit or SwiftUI.
 @main
 enum CmuxMain {
     static func main() {
@@ -177,18 +172,7 @@ struct cmuxApp: App {
             hostActions: HostSettingsActions(configFileURL: configFileURL)
         )
         StartupBreadcrumbLog.append("app.init.settingsRuntime.created")
-        let browserWebExtensionHost: (any BrowserWebExtensionHosting)?
-        if #available(macOS 15.4, *) {
-            let support = BrowserWebExtensionSupport()
-            support.configure(
-                jsonStore: settingsJSONStore,
-                catalog: settingsCatalog
-            )
-            browserWebExtensionHost = support
-            StartupBreadcrumbLog.append("app.init.browserWebExtensions.configured")
-        } else {
-            browserWebExtensionHost = nil
-        }
+        let browserWebExtensionHost = BrowserWebExtensionHostFactory.make(jsonStore: settingsJSONStore, catalog: settingsCatalog)
         let startupAppearance = AppearanceSettings.resolvedMode()
         Self.applyAppearance(startupAppearance, duringLaunch: true)
         StartupBreadcrumbLog.append("app.init.appearance.applied", fields: ["mode": startupAppearance.rawValue])

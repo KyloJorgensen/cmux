@@ -35,6 +35,23 @@ import Foundation
 ///     credentialsCache.apply(password)
 /// }
 /// ```
+/// A conditional JSON setting write could not be applied safely.
+public enum JSONConfigStoreWriteError: LocalizedError, Equatable, Sendable {
+    /// The stored value no longer matches the caller's observed value, or the
+    /// stored representation cannot be decoded without losing data.
+    case valueChanged
+
+    public var errorDescription: String? {
+        switch self {
+        case .valueChanged:
+            String(
+                localized: "settings.error.valueChanged",
+                defaultValue: "The setting changed on disk. Review the latest value and try again."
+            )
+        }
+    }
+}
+
 public actor JSONConfigStore {
     /// The on-disk location this store reads and writes.
     public nonisolated let fileURL: URL
@@ -117,7 +134,39 @@ public actor JSONConfigStore {
     public func set<Value>(_ value: Value, for key: JSONKey<Value>) throws {
         try mutateRoot { root in
             key.path.assign(value.encodeForJSON(), in: &root)
+            return true
         }
+    }
+
+    /// Writes `value` only when the latest on-disk value still equals
+    /// `expectedValue`. A present but malformed value never compares equal to
+    /// the key default, preventing a settings UI from overwriting data it could
+    /// not decode and display.
+    ///
+    /// - Throws: ``JSONConfigStoreWriteError/valueChanged`` when the value is
+    ///   stale or malformed, plus normal read/write errors.
+    public func set<Value>(
+        _ value: Value,
+        for key: JSONKey<Value>,
+        ifCurrentValueIs expectedValue: Value
+    ) throws {
+        var didMatch = false
+        try mutateRoot(forceReload: true) { root in
+            let raw = key.path.lookup(in: root)
+            let currentValue: Value
+            if raw == nil {
+                currentValue = key.defaultValue
+            } else if let decoded = Value.decodeFromJSON(raw) {
+                currentValue = decoded
+            } else {
+                return false
+            }
+            guard currentValue == expectedValue else { return false }
+            key.path.assign(value.encodeForJSON(), in: &root)
+            didMatch = true
+            return true
+        }
+        guard didMatch else { throw JSONConfigStoreWriteError.valueChanged }
     }
 
     /// Removes the key's entry from the file. Parent objects that become
@@ -128,6 +177,7 @@ public actor JSONConfigStore {
     public func reset<Value>(_ key: JSONKey<Value>) throws {
         try mutateRoot { root in
             key.path.remove(in: &root)
+            return true
         }
     }
 
@@ -151,9 +201,6 @@ public actor JSONConfigStore {
                     return
                 }
 
-                let initial = await self.value(for: key)
-                continuation.yield(initial)
-
                 let id = UUID()
                 // bufferingNewest(1): the signal carries no payload, so under
                 // burst file changes we only care that *something* changed.
@@ -165,7 +212,8 @@ public actor JSONConfigStore {
                 )
                 await self.addSubscriber(id: id, continuation: signalContinuation)
 
-                var last = initial
+                var last = await self.value(for: key)
+                continuation.yield(last)
                 for await _ in signal {
                     if Task.isCancelled { break }
                     let current = await self.value(for: key)
@@ -334,13 +382,31 @@ public actor JSONConfigStore {
     /// target's data. A single mutation reads and writes through one resolution
     /// snapshot, so a concurrent retarget serializes against the write instead
     /// of splitting the operation across two targets.
-    private func mutateRoot(_ mutate: (inout [String: Any]) -> Void) throws {
+    private func mutateRoot(
+        forceReload: Bool = true,
+        _ mutate: (inout [String: Any]) -> Bool
+    ) throws {
         // Write through a symlink to its target rather than at the link path:
         // an atomic write is a temp-file + `rename()`, which would replace the
         // link itself with a regular file and break a dotfiles-managed config.
         let writeURL = Self.resolvedWriteURL(for: fileURL)
-        var root = cacheIsCurrent(for: writeURL.path) ? cachedRoot : try readFromDisk(at: writeURL)
-        mutate(&root)
+        var root = if forceReload || !cacheIsCurrent(for: writeURL.path) {
+            try readFromDisk(at: writeURL)
+        } else {
+            cachedRoot
+        }
+        guard mutate(&root) else {
+            // A compare-and-set rejection still loaded a fresher disk snapshot.
+            // Commit that snapshot so readers and subscribers do not remain stale.
+            cachedRoot = root
+            cacheValid = true
+            cachedRootResolvedPath = writeURL.path
+            for continuation in subscribers.values {
+                continuation.yield(())
+            }
+            return
+        }
+
 
         let parent = writeURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)

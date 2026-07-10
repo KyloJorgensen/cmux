@@ -9,7 +9,6 @@ import CmuxWorkspaces
 import CmuxTerminal
 import SwiftUI
 import AppKit
-import CmuxFoundation
 import Bonsplit
 import CMUXAgentLaunch
 import CmuxSettings
@@ -25,29 +24,6 @@ import Network
 import CoreText
 import WebKit
 
-#if DEBUG
-func debugWorkspaceDescriptionPreview(_ text: String?, limit: Int = 120) -> String {
-    guard let text else { return "nil" }
-    let escaped = text
-        .replacingOccurrences(of: "\\", with: "\\\\")
-        .replacingOccurrences(of: "\n", with: "\\n")
-        .replacingOccurrences(of: "\r", with: "\\r")
-        .replacingOccurrences(of: "\t", with: "\\t")
-    if escaped.count <= limit {
-        return escaped
-    }
-    return "\(escaped.prefix(limit))..."
-}
-#endif
-
-private final class WorkspacePendingTerminalInputObserver: @unchecked Sendable {
-    var observer: NSObjectProtocol?
-}
-
-private struct SessionPaneRestoreEntry {
-    let paneId: PaneID
-    let snapshot: SessionPaneLayoutSnapshot
-}
 
 extension Workspace {
     func sessionSnapshot(
@@ -1945,19 +1921,6 @@ typealias ClosedBrowserPanelRestoreSnapshot = CmuxBrowser.ClosedBrowserPanelRest
 /// Each workspace contains one BonsplitController that manages split panes and nested surfaces.
 @MainActor
 final class Workspace: Identifiable, ObservableObject {
-    enum BrowserPanelCreationPolicy {
-        case userInitiated
-        case automationPreload
-        case restoration
-
-        var permitsCreationWhenBrowserDisabled: Bool {
-            self == .restoration
-        }
-
-        var preloadsInitialNavigationInBackground: Bool {
-            self == .automationPreload
-        }
-    }
 
     static let terminalScrollBarHiddenDidChangeNotification = Notification.Name(
         "cmux.workspaceTerminalScrollBarHiddenDidChange"

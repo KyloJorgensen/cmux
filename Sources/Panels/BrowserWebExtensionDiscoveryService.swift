@@ -28,15 +28,32 @@ actor BrowserWebExtensionDiscoveryService {
     private static let pluginkitTimeout: Duration = .seconds(10)
     private var activePluginkitProcess: Process?
     private var activePluginkitStdout: Pipe?
+    private var discoveryOperation: (
+        id: UUID,
+        task: Task<[BrowserWebExtensionCandidate], Never>
+    )?
 
     func discoverInstalledSafariExtensions() async -> [BrowserWebExtensionCandidate] {
-        let output: String
-        do {
-            output = try await runPluginkit()
-        } catch {
-            return []
+        if let discoveryOperation {
+            return await discoveryOperation.task.value
         }
-        return Self.parse(pluginkitOutput: output)
+
+        let operationID = UUID()
+        let task = Task<[BrowserWebExtensionCandidate], Never> { [weak self] in
+            guard let self else { return [] }
+            do {
+                let output = try await runPluginkit()
+                return Self.parse(pluginkitOutput: output)
+            } catch {
+                return []
+            }
+        }
+        discoveryOperation = (operationID, task)
+        let result = await task.value
+        if discoveryOperation?.id == operationID {
+            discoveryOperation = nil
+        }
+        return result
     }
 
     /// Parses `pluginkit -m -A -v` output. The tool is human-readable rather

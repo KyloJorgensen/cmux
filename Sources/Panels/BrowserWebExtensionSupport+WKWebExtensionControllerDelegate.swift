@@ -2,12 +2,27 @@ import AppKit
 import WebKit
 
 @available(macOS 15.4, *)
+func browserWebExtensionCanRepresentNewWindow(
+    type: WKWebExtension.WindowType,
+    shouldBePrivate: Bool,
+    tabURLCount: Int,
+    existingTabCount: Int
+) -> Bool {
+    !shouldBePrivate
+        && existingTabCount == 0
+        && (type != .popup || tabURLCount <= 1)
+}
+
+@available(macOS 15.4, *)
 extension BrowserWebExtensionSupport: WKWebExtensionControllerDelegate {
     func webExtensionController(
         _ controller: WKWebExtensionController,
         openWindowsFor extensionContext: WKWebExtensionContext
     ) -> [any WKWebExtensionWindow] {
-        let openWindows: [any WKWebExtensionWindow] = [windowAdapter] + popouts(for: extensionContext)
+        var openWindows: [any WKWebExtensionWindow] = popouts(for: extensionContext)
+        if activeTabAdapter != nil {
+            openWindows.insert(windowAdapter, at: 0)
+        }
         guard let focusedWindow = webExtensionController(controller, focusedWindowFor: extensionContext) else {
             return openWindows
         }
@@ -21,7 +36,8 @@ extension BrowserWebExtensionSupport: WKWebExtensionControllerDelegate {
         _ controller: WKWebExtensionController,
         focusedWindowFor extensionContext: WKWebExtensionContext
     ) -> (any WKWebExtensionWindow)? {
-        popouts(for: extensionContext).first(where: \.isKeyWindow) ?? windowAdapter
+        popouts(for: extensionContext).first(where: \.isKeyWindow)
+            ?? activeTabAdapter.map { _ in windowAdapter }
     }
 
     private func popouts(for extensionContext: WKWebExtensionContext) -> [BrowserWebExtensionPopoutWindowController] {
@@ -40,7 +56,12 @@ extension BrowserWebExtensionSupport: WKWebExtensionControllerDelegate {
             "urls=\(configuration.tabURLs.count) focused=\(configuration.shouldBeFocused ? 1 : 0)"
         )
 #endif
-        guard !configuration.shouldBePrivate else {
+        guard browserWebExtensionCanRepresentNewWindow(
+            type: configuration.windowType,
+            shouldBePrivate: configuration.shouldBePrivate,
+            tabURLCount: configuration.tabURLs.count,
+            existingTabCount: configuration.tabs.count
+        ) else {
             completionHandler(nil, openTabsUnsupportedError())
             return
         }
@@ -63,10 +84,10 @@ extension BrowserWebExtensionSupport: WKWebExtensionControllerDelegate {
             support: self
         )
         popouts.append(popout)
-        controller.didOpenWindow(popout)
-        controller.didOpenTab(popout.tab)
+        extensionContext.didOpenWindow(popout)
+        extensionContext.didOpenTab(popout.tab)
         if popout.isKeyWindow {
-            controller.didFocusWindow(popout)
+            extensionContext.didFocusWindow(popout)
         }
         completionHandler(popout, nil)
     }
@@ -76,9 +97,6 @@ extension BrowserWebExtensionSupport: WKWebExtensionControllerDelegate {
         for extensionContext: WKWebExtensionContext
     ) -> (any WKWebExtensionWindow)? {
         guard !configuration.tabURLs.isEmpty else {
-            guard configuration.tabs.isEmpty else {
-                return windowAdapter
-            }
             return openBrowserTab(
                 url: nil,
                 shouldActivate: configuration.shouldBeFocused,
@@ -260,11 +278,12 @@ extension BrowserWebExtensionSupport: WKWebExtensionControllerDelegate {
     }
 
     func focusOwningCmuxTab(panelID: UUID, workspaceId: UUID) -> Bool {
-        if let workspace = AppDelegate.shared?.workspaceContainingPanel(
+        if let owner = AppDelegate.shared?.workspaceContainingPanel(
             panelId: panelID,
             preferredWorkspaceId: workspaceId
-        )?.workspace {
-            workspace.focusPanel(panelID)
+        ) {
+            owner.tabManager.selectWorkspace(owner.workspace)
+            owner.workspace.focusPanel(panelID)
             return true
         }
         guard let dock = dockContainingPanel(panelID) else { return false }

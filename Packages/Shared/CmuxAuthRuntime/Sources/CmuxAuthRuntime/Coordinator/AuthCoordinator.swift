@@ -707,6 +707,7 @@ public final class AuthCoordinator {
             mockDataEnabled: launch.mockDataEnabled
         )
     }
+
     var fixtureUser: CMUXAuthUser? {
         CMUXAuthUser(
             uiTestFixtureEnvironment: launch.environment,
@@ -714,6 +715,7 @@ public final class AuthCoordinator {
             mockDataEnabled: launch.mockDataEnabled
         )
     }
+
     static let uiTestMockUser = CMUXAuthUser(
         id: "uitest_user",
         primaryEmail: "uitest@cmux.local",

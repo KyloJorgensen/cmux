@@ -111,180 +111,6 @@ enum GhosttyBackgroundTheme {
     }
 }
 
-enum BrowserThemeMode: String, CaseIterable, Identifiable {
-    case system
-    case light
-    case dark
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .system:
-            return String(localized: "theme.system", defaultValue: "System")
-        case .light:
-            return String(localized: "theme.light", defaultValue: "Light")
-        case .dark:
-            return String(localized: "theme.dark", defaultValue: "Dark")
-        }
-    }
-
-    var iconName: String {
-        switch self {
-        case .system:
-            return "circle.lefthalf.filled"
-        case .light:
-            return "sun.max"
-        case .dark:
-            return "moon"
-        }
-    }
-}
-
-enum BrowserThemeSettings {
-    static let modeKey = "browserThemeMode"
-    static let legacyForcedDarkModeEnabledKey = "browserForcedDarkModeEnabled"
-    static let defaultMode: BrowserThemeMode = .system
-
-    static func mode(for rawValue: String?) -> BrowserThemeMode {
-        guard let rawValue, let mode = BrowserThemeMode(rawValue: rawValue) else {
-            return defaultMode
-        }
-        return mode
-    }
-
-    static func mode(defaults: UserDefaults = .standard) -> BrowserThemeMode {
-        let resolvedMode = mode(for: defaults.string(forKey: modeKey))
-        if defaults.string(forKey: modeKey) != nil {
-            return resolvedMode
-        }
-
-        // Migrate the legacy bool toggle only when the new mode key is unset.
-        if defaults.object(forKey: legacyForcedDarkModeEnabledKey) != nil {
-            let migratedMode: BrowserThemeMode = defaults.bool(forKey: legacyForcedDarkModeEnabledKey) ? .dark : .system
-            defaults.set(migratedMode.rawValue, forKey: modeKey)
-            return migratedMode
-        }
-
-        return defaultMode
-    }
-
-    static func apply(_ mode: BrowserThemeMode, to webView: WKWebView) {
-        switch mode {
-        case .system:
-            webView.appearance = nil
-        case .light:
-            webView.appearance = NSAppearance(named: .aqua)
-        case .dark:
-            webView.appearance = NSAppearance(named: .darkAqua)
-        }
-    }
-}
-
-enum BrowserImportHintVariant: String, CaseIterable, Identifiable {
-    case inlineStrip
-    case floatingCard
-    case toolbarChip
-    case settingsOnly
-
-    var id: String { rawValue }
-}
-
-enum BrowserImportHintBlankTabPlacement: Equatable {
-    case hidden
-    case inlineStrip
-    case floatingCard
-    case toolbarChip
-}
-
-enum BrowserImportHintSettingsStatus: Equatable {
-    case visible
-    case hidden
-    case settingsOnly
-}
-
-struct BrowserImportHintPresentation: Equatable {
-    let blankTabPlacement: BrowserImportHintBlankTabPlacement
-    let settingsStatus: BrowserImportHintSettingsStatus
-
-    init(
-        variant: BrowserImportHintVariant,
-        showOnBlankTabs: Bool,
-        isDismissed: Bool
-    ) {
-        if variant == .settingsOnly {
-            blankTabPlacement = .hidden
-            settingsStatus = .settingsOnly
-            return
-        }
-
-        if !showOnBlankTabs || isDismissed {
-            blankTabPlacement = .hidden
-            settingsStatus = .hidden
-            return
-        }
-
-        switch variant {
-        case .inlineStrip:
-            blankTabPlacement = .inlineStrip
-        case .floatingCard:
-            blankTabPlacement = .floatingCard
-        case .toolbarChip:
-            blankTabPlacement = .toolbarChip
-        case .settingsOnly:
-            blankTabPlacement = .hidden
-        }
-        settingsStatus = .visible
-    }
-}
-
-enum BrowserImportHintSettings {
-    static let variantKey = "browserImportHintVariant"
-    static let showOnBlankTabsKey = "browserImportHintShowOnBlankTabs"
-    static let dismissedKey = "browserImportHintDismissed"
-    static let defaultVariant: BrowserImportHintVariant = .toolbarChip
-    static let defaultShowOnBlankTabs = true
-    static let defaultDismissed = false
-
-    static func variant(for rawValue: String?) -> BrowserImportHintVariant {
-        guard let rawValue, let variant = BrowserImportHintVariant(rawValue: rawValue) else {
-            return defaultVariant
-        }
-        return variant
-    }
-
-    static func variant(defaults: UserDefaults = .standard) -> BrowserImportHintVariant {
-        variant(for: defaults.string(forKey: variantKey))
-    }
-
-    static func showOnBlankTabs(defaults: UserDefaults = .standard) -> Bool {
-        if defaults.object(forKey: showOnBlankTabsKey) == nil {
-            return defaultShowOnBlankTabs
-        }
-        return defaults.bool(forKey: showOnBlankTabsKey)
-    }
-
-    static func isDismissed(defaults: UserDefaults = .standard) -> Bool {
-        if defaults.object(forKey: dismissedKey) == nil {
-            return defaultDismissed
-        }
-        return defaults.bool(forKey: dismissedKey)
-    }
-
-    static func presentation(defaults: UserDefaults = .standard) -> BrowserImportHintPresentation {
-        BrowserImportHintPresentation(
-            variant: variant(defaults: defaults),
-            showOnBlankTabs: showOnBlankTabs(defaults: defaults),
-            isDismissed: isDismissed(defaults: defaults)
-        )
-    }
-
-    static func reset(defaults: UserDefaults = .standard) {
-        defaults.set(defaultVariant.rawValue, forKey: variantKey)
-        defaults.set(defaultShowOnBlankTabs, forKey: showOnBlankTabsKey)
-        defaults.set(defaultDismissed, forKey: dismissedKey)
-    }
-}
 
 // `BrowserProfileDefinition` and `BrowserProfileClearOutcome` now live in the
 // `CmuxBrowser` package (imported above); the call sites reference them
@@ -3776,16 +3602,7 @@ final class BrowserPanel: Panel, ObservableObject {
         navigationDelegate.didFinish = { [weak self] webView in
             MainActor.assumeIsolated {
                 guard let self, self.isCurrentWebView(webView, instanceID: boundWebViewInstanceID) else { return }
-                self.isMainFrameProvisionalNavigationActive = false
-                self.publishCommittedURL(from: webView)
-                self.applyMuteState(to: webView, reason: "navigationFinish")
-                if self.navigationDelegate?.activeErrorPageDisplayURL == nil {
-                    self.realignRestoredSessionHistoryToLiveCurrentIfPossible()
-                    boundHistoryStore.recordVisit(url: webView.url, title: webView.title)
-                    self.refreshFavicon(from: webView)
-                }
-                // Keep find-in-page open through load completion and refresh matches for the new DOM.
-                self.restoreFindStateAfterNavigation(replaySearch: true)
+                self.completeNavigationLifecycle(for: webView, historyStore: boundHistoryStore)
             }
         }
         navigationDelegate.didFailNavigation = { [weak self] failedWebView, failedURL, failedNavigation in
@@ -3839,6 +3656,19 @@ final class BrowserPanel: Panel, ObservableObject {
                 self.noteDiscardedWebViewRestoreNavigationCommitted(reason: "navigation_download")
             }
         }
+    }
+
+    private func completeNavigationLifecycle(for webView: WKWebView, historyStore: BrowserHistoryStore) {
+        isMainFrameProvisionalNavigationActive = false
+        publishCommittedURL(from: webView)
+        applyMuteState(to: webView, reason: "navigationFinish")
+        if navigationDelegate?.activeErrorPageDisplayURL == nil {
+            realignRestoredSessionHistoryToLiveCurrentIfPossible()
+            historyStore.recordVisit(url: webView.url, title: webView.title)
+            refreshFavicon(from: webView)
+        }
+        // Keep find-in-page open through load completion and refresh matches for the new DOM.
+        restoreFindStateAfterNavigation(replaySearch: true)
     }
 
     private func publishCommittedURL(from webView: WKWebView) {
@@ -4226,16 +4056,33 @@ final class BrowserPanel: Panel, ObservableObject {
             shouldRenderWebView = renderInitialNavigation
             guard renderInitialNavigation else { return }
             if adoptedPrewarmedWebView {
-                // Already navigated while hidden; record for recovery paths.
-                navigationDelegate?.recordAttemptedRequest(URLRequest(url: url), displayURL: url)
-                // The pool only vends finished loads; seed the committed flag so
-                // blank-shell healing never reloads the adopted page on reveal.
-                hasCommittedDocumentSinceWebViewReplacement = true
-                refreshBackgroundAppearance()
+                synchronizeAdoptedPrewarmedWebViewState(requestedURL: url)
             } else {
                 navigate(to: url, allowWebExtensionContext: initialExtensionNavigationConfiguration != nil)
             }
         }
+    }
+
+    // Internal so deterministic tests can exercise finished-view adoption without
+    // depending on a live prewarm network load.
+    func synchronizeAdoptedPrewarmedWebViewState(requestedURL: URL) {
+        navigationDelegate?.recordAttemptedRequest(URLRequest(url: requestedURL), displayURL: requestedURL)
+        hasCommittedDocumentSinceWebViewReplacement = !Self.isAboutBlankURL(webView.url)
+
+        // These KVO values were emitted while the pool owned the web view, before
+        // this panel installed its observers. Seed them from the live view before
+        // running the same completion side effects as a normal didFinish callback.
+        let title = (webView.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !title.isEmpty {
+            pageTitle = title
+        }
+        nativeCanGoBack = webView.canGoBack
+        nativeCanGoForward = webView.canGoForward
+        isLoading = webView.isLoading
+        estimatedProgress = webView.estimatedProgress
+
+        completeNavigationLifecycle(for: webView, historyStore: historyStore)
+        refreshNavigationAvailability()
     }
 
     @discardableResult

@@ -1,4 +1,5 @@
 import AppKit
+import CmuxSettings
 
 extension AppDelegate {
     /// Extension manifest commands run only after configured cmux shortcuts decline the event.
@@ -41,5 +42,19 @@ extension AppDelegate {
             return matchShortcutStroke(event: event, stroke: shortcut.firstStroke)
         }
         return matchConfiguredShortcut(event: event, shortcut: shortcut)
+    }
+
+    /// Allow AppKit-backed browser surfaces (WKWebView) to route non-menu shortcuts
+    /// through the same app-level shortcut handler used by the local key monitor.
+    @discardableResult
+    func handleBrowserSurfaceKeyEquivalent(_ event: NSEvent) -> Bool {
+        handleConfiguredShortcutKeyEquivalent(event)
+    }
+
+    /// Route AppKit key-equivalent fallbacks through the same configured shortcut
+    /// dispatcher as the local key monitor before any stale menu item can run.
+    @discardableResult
+    func handleConfiguredShortcutKeyEquivalent(_ event: NSEvent) -> Bool {
+        handleCustomShortcut(event: event)
     }
 }

@@ -63,6 +63,10 @@ func browserNavigationShouldFallbackNilTargetToNewTab(
     navigationType != .other
 }
 
+func browserNavigationShouldBlockWebExtensionURLInOrdinaryPopup(_ url: URL) -> Bool {
+    url.scheme?.lowercased() == "webkit-extension"
+}
+
 extension BrowserNavigationDelegate {
     func shouldRouteWebExtensionNavigationAsCurrentTab(
         targetFrameIsMainFrame: Bool?,
